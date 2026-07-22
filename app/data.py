@@ -9,6 +9,7 @@ whether the DB uses numeric keys or semantic keys ("price", "sizes", ...).
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 
@@ -166,9 +167,12 @@ def is_escalation(message: str) -> bool:
 
 
 def menu_item_for(number: str) -> MenuItem | None:
-    number = number.strip()
+    # Accept "1", " 1 ", "1.", "1)", "(1)" - i.e. a bare number with surrounding
+    # punctuation - but NOT "option 1" or "I want 1 shirt".
+    m = re.fullmatch(r"\W*(\d{1,3})\W*", number.strip())
+    key = m.group(1) if m else number.strip()
     for item in ACTIVE.menu:
-        if item.number == number:
+        if item.number == key:
             return item
     return None
 

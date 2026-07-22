@@ -19,7 +19,9 @@ class MainMenuState(State):
     def handle(self, context, message: str) -> Transition:
         text = str(message).strip().lower()
 
-        if text in RESHOW:
+        # Empty/whitespace or a greeting: just (re)show the menu, don't count it
+        # against the stuck-handoff threshold.
+        if not text or text in RESHOW:
             return Transition(None, data.format_main_menu(), dict(RESET))
 
         # Numbered menu selection -> route by the option's intent.

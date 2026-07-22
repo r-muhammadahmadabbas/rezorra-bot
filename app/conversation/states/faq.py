@@ -16,6 +16,9 @@ class FAQState(State):
     def handle(self, context, message: str) -> Transition:
         text = str(message).strip().lower()
 
+        if not text:
+            return Transition(None, "Please type your question, or MENU for the options.")
+
         if text in {"menu", "main menu", "back", "0"}:
             from app.conversation.states.main_menu import MainMenuState
             return Transition(MainMenuState(), data.format_main_menu("Back to the menu."),
