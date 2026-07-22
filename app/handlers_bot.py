@@ -36,8 +36,11 @@ async def handle(msg: IncomingMessage, wa: Sender) -> None:
     if msg.profile_name and not ctx.customer_name:
         ctx.customer_name = msg.profile_name
 
-    # Explicit request for a human wins from any state (unless already handed off).
-    if data.is_escalation(text) and not isinstance(ctx.current_state, HandoffState):
+    # Explicit request for a human wins from any state - but a genuine FAQ
+    # ("return policy") must NOT trigger handoff just because the DB lists
+    # "return" as an escalation keyword. So FAQs take precedence.
+    if (data.is_escalation(text) and not data.match_faq(text)
+            and not isinstance(ctx.current_state, HandoffState)):
         ctx.current_state = HandoffState()
         ctx.unrecognized_count = 0
         log.info("HANDOFF (explicit) user=%s", msg.user_id)

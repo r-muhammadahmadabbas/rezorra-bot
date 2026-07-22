@@ -1,12 +1,11 @@
 """Merchant data - served from an in-memory catalog.
 
-The catalog is loaded from Supabase at startup (app/catalog.py). If the DB is not
-configured or unreachable, it falls back to the offline SEED below, so the bot
-always runs. The conversation states only ever call the sync functions here -
-they never touch the database directly, which is what lets Dev 3's synchronous
-state machine stay unchanged.
+Loaded from Supabase at startup (app/catalog.py); falls back to the offline SEED
+if the DB is unreachable/empty. Conversation states only call the sync functions
+here, which is what lets Dev 3's synchronous state machine stay unchanged.
 
-Swap the DB source freely; nothing in the states changes.
+The menu is normalised to numbered options routed by *intent*, so it works
+whether the DB uses numeric keys or semantic keys ("price", "sizes", ...).
 """
 from __future__ import annotations
 
@@ -30,16 +29,48 @@ class Faq:
 
 
 @dataclass
+class MenuItem:
+    number: str      # display number the user types, e.g. "1"
+    label: str       # what the user sees, e.g. "Prices"
+    intent: str      # canonical action: price/sizes/stock/delivery/order/recommendation/faq/agent
+
+
+# Canonical intents the state machine knows how to handle.
+INTENTS = {"price", "sizes", "stock", "delivery", "order", "recommendation", "faq", "agent"}
+
+
+def canonical_intent(raw: str) -> str | None:
+    """Map any DB option_key / target_intent to one canonical intent."""
+    t = (raw or "").lower()
+    if "recommend" in t:
+        return "recommendation"
+    if "price" in t:
+        return "price"
+    if "size" in t:
+        return "sizes"
+    if "stock" in t:
+        return "stock"
+    if "deliver" in t:
+        return "delivery"
+    if "order" in t or "buy" in t or "purchase" in t:
+        return "order"
+    if "faq" in t or "question" in t:
+        return "faq"
+    if "agent" in t or "human" in t or "support" in t:
+        return "agent"
+    return None
+
+
+@dataclass
 class Catalog:
-    """Everything the bot needs about one merchant, held in memory."""
     products: list[Product] = field(default_factory=list)
     faqs: list[Faq] = field(default_factory=list)
-    menu_options: list[tuple[str, str]] = field(default_factory=list)  # (key, label)
+    menu: list[MenuItem] = field(default_factory=list)
     escalation_keywords: list[str] = field(default_factory=list)
-    source: str = "seed"  # "seed" or "supabase"
+    source: str = "seed"
 
 
-# --- Offline seed (from Rezorra_dev4-week1/app/seed.py) - the fallback ---
+# --- Offline seed (fallback) ---
 
 SEED = Catalog(
     products=[
@@ -69,18 +100,21 @@ SEED = Catalog(
             "We are an online-only brand based in Karachi and ship from our warehouse. No physical outlet.",
             ["location", "shop", "store", "outlet", "office", "address", "shop kahan"]),
     ],
-    menu_options=[
-        ("1", "Prices"), ("2", "Sizes & fit"), ("3", "Stock availability"),
-        ("4", "Delivery & COD"), ("5", "Place an order"),
-        ("6", "Ask a question (FAQ)"), ("7", "Talk to a human agent"),
+    menu=[
+        MenuItem("1", "Prices", "price"),
+        MenuItem("2", "Sizes & fit", "sizes"),
+        MenuItem("3", "Stock availability", "stock"),
+        MenuItem("4", "Delivery & COD", "delivery"),
+        MenuItem("5", "Place an order", "order"),
+        MenuItem("6", "Ask a question (FAQ)", "faq"),
+        MenuItem("7", "Talk to a human agent", "agent"),
     ],
     escalation_keywords=[
-        "agent", "human", "representative", "operator", "complaint",
+        "agent", "human", "representative", "operator",
         "numainda", "banda", "bande", "insaan", "baat karao", "baat karni",
     ],
 )
 
-# The catalog the bot is currently serving. Replaced by the DB loader at startup.
 ACTIVE: Catalog = SEED
 
 
@@ -89,7 +123,23 @@ def set_active(catalog: Catalog) -> None:
     ACTIVE = catalog
 
 
-# --- Query functions the states call (read ACTIVE) ---
+def build_menu(pairs: list[tuple[str, str]]) -> list[MenuItem]:
+    """Turn (raw_key_or_intent, label) pairs into a clean numbered, de-duplicated
+    menu keyed by intent. Used by the DB loader."""
+    seen: set[str] = set()
+    items: list[MenuItem] = []
+    n = 1
+    for raw, label in pairs:
+        intent = canonical_intent(raw) or canonical_intent(label)
+        if not intent or intent in seen:
+            continue
+        seen.add(intent)
+        items.append(MenuItem(str(n), label.strip() or intent.title(), intent))
+        n += 1
+    return items
+
+
+# --- Query functions the states call ---
 
 def match_faq(message: str) -> Faq | None:
     text = message.lower()
@@ -104,20 +154,27 @@ def is_escalation(message: str) -> bool:
     return any(kw and kw in text for kw in ACTIVE.escalation_keywords)
 
 
+def menu_item_for(number: str) -> MenuItem | None:
+    number = number.strip()
+    for item in ACTIVE.menu:
+        if item.number == number:
+            return item
+    return None
+
+
 def delivery_answer() -> str:
-    # Pull the delivery-related FAQ answers, whatever their source.
     wanted = ("delivery", "cod", "cash on delivery")
     parts = [f.answer for f in ACTIVE.faqs
              if any(w in (f.question + " " + " ".join(f.keywords)).lower() for w in wanted)]
     return "\n".join(parts) if parts else "Please ask us about delivery and we'll help."
 
 
-# --- Formatting helpers (content centralised, states stay thin) ---
+# --- Formatting helpers ---
 
 def format_main_menu(header: str = "") -> str:
     lines = [header] if header else []
     lines.append("How can we help you today? Reply with a number:")
-    lines += [f"{key}. {label}" for key, label in ACTIVE.menu_options]
+    lines += [f"{m.number}. {m.label}" for m in ACTIVE.menu]
     return "\n".join(lines)
 
 
@@ -140,5 +197,13 @@ def format_stock() -> str:
     for p in ACTIVE.products:
         tag = "Low stock!" if p.stock <= 10 else "In stock"
         lines.append(f"- {p.name}: {p.stock} units ({tag})")
+    lines.append("\nType MENU for the options.")
+    return "\n".join(lines)
+
+
+def format_recommendation() -> str:
+    lines = ["*Popular picks:*"]
+    for p in sorted(ACTIVE.products, key=lambda x: x.stock, reverse=True)[:3]:
+        lines.append(f"- {p.name}: Rs. {int(p.price)} ({', '.join(p.sizes) if p.sizes else 'N/A'})")
     lines.append("\nType MENU for the options.")
     return "\n".join(lines)

@@ -32,8 +32,8 @@ async def load_catalog() -> str:
         return "seed (db empty)"
 
     # Fill any gaps from the seed so the menu/escalation always work.
-    if not catalog.menu_options:
-        catalog.menu_options = data.SEED.menu_options
+    if not catalog.menu:
+        catalog.menu = data.SEED.menu
     if not catalog.escalation_keywords:
         catalog.escalation_keywords = data.SEED.escalation_keywords
 
@@ -84,7 +84,12 @@ async def _load_from_db() -> data.Catalog:
         for f in db_faqs
     ]
 
-    menu_options = [(m.option_key, m.label) for m in db_menu if m.option_key and m.label]
+    # Prefer target_intent, fall back to option_key; de-dupe + number in build_menu.
+    menu_pairs = [
+        (m.target_intent or m.option_key or "", m.label or "")
+        for m in sorted(db_menu, key=lambda x: (x.sort_order or 0))
+    ]
+    menu = data.build_menu(menu_pairs)
 
     escalation_keywords: list[str] = []
     for r in db_rules:
@@ -93,7 +98,7 @@ async def _load_from_db() -> data.Catalog:
     return data.Catalog(
         products=products,
         faqs=faqs,
-        menu_options=menu_options,
+        menu=menu,
         escalation_keywords=escalation_keywords,
         source="supabase",
     )
