@@ -123,20 +123,31 @@ def set_active(catalog: Catalog) -> None:
     ACTIVE = catalog
 
 
+# Preferred display order; anything unknown is appended after these.
+MENU_ORDER = ["price", "sizes", "stock", "delivery", "recommendation", "order", "faq", "agent"]
+
+# Default labels used when the DB doesn't supply one (e.g. the injected FAQ option).
+DEFAULT_LABELS = {
+    "price": "Prices", "sizes": "Sizes & fit", "stock": "Stock availability",
+    "delivery": "Delivery & COD", "recommendation": "Product recommendation",
+    "order": "Place an order", "faq": "Ask a question (FAQ)", "agent": "Talk to a human agent",
+}
+
+
 def build_menu(pairs: list[tuple[str, str]]) -> list[MenuItem]:
-    """Turn (raw_key_or_intent, label) pairs into a clean numbered, de-duplicated
-    menu keyed by intent. Used by the DB loader."""
-    seen: set[str] = set()
-    items: list[MenuItem] = []
-    n = 1
+    """Turn (raw_key_or_intent, label) pairs into a clean, de-duplicated, ordered
+    and numbered menu keyed by intent. Always includes an FAQ option."""
+    label_by_intent: dict[str, str] = {}
     for raw, label in pairs:
         intent = canonical_intent(raw) or canonical_intent(label)
-        if not intent or intent in seen:
-            continue
-        seen.add(intent)
-        items.append(MenuItem(str(n), label.strip() or intent.title(), intent))
-        n += 1
-    return items
+        if intent and intent not in label_by_intent:
+            label_by_intent[intent] = label.strip() or DEFAULT_LABELS.get(intent, intent.title())
+
+    # Guarantee an FAQ entry even if the DB has none.
+    label_by_intent.setdefault("faq", DEFAULT_LABELS["faq"])
+
+    ordered = sorted(label_by_intent, key=lambda i: MENU_ORDER.index(i) if i in MENU_ORDER else len(MENU_ORDER))
+    return [MenuItem(str(n), label_by_intent[intent], intent) for n, intent in enumerate(ordered, 1)]
 
 
 # --- Query functions the states call ---
